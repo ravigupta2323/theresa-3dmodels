@@ -17,14 +17,16 @@ const PARAM_IDS = [
 /* ---------- parameter persistence ---------- */
 function loadParams() {
   try {
-    const saved = JSON.parse(localStorage.getItem("fidget_params_v2") || "{}");
+    const saved = JSON.parse(localStorage.getItem("fidget_params_v5") || "{}");
     for (const id of PARAM_IDS) if (saved[id] !== undefined) $(id).value = saved[id];
+    if (saved.trim_bottom !== undefined) $("trim_bottom").checked = saved.trim_bottom;
   } catch (e) { /* ignore corrupt storage */ }
 }
 function collectParams() {
   const p = {};
   for (const id of PARAM_IDS) p[id] = $(id).value;
-  localStorage.setItem("fidget_params_v2", JSON.stringify(p));
+  p.trim_bottom = $("trim_bottom").checked;
+  localStorage.setItem("fidget_params_v5", JSON.stringify(p));
   const autoOr = (raw) => {
     const t = (raw || "").trim().toLowerCase();
     const n = parseFloat(t);
@@ -37,6 +39,7 @@ function collectParams() {
     size_mode: p.size_mode,
     manual_scale_factor: parseFloat(p.manual_scale_factor) || 1.0,
     bottom_solid_mm: parseFloat(p.bottom_solid_mm),
+    trim_bottom: p.trim_bottom,
     output_prefix: p.output_prefix || "fidget",
   };
 }
@@ -210,12 +213,18 @@ function setupCutTuner(st) {
 }
 
 function setDims(st) {
-  const fmt = (a) => a.map((v) => v.toFixed(1)).join(" x ");
-  $("dims").textContent =
-    `clicker  ${fmt(st.model_size_mm)} mm\n` +
-    `cap      ${fmt(st.cap_size_mm)} mm\n` +
-    `holder   ${fmt(st.holder_size_mm)} mm\n` +
-    `look: ${st.look}  travel: ${st.travel_mm} mm`;
+  const fmt = (a) => a.map((v) => v.toFixed(1).padStart(6)).join(" ");
+  let txt =
+    `          width  depth height\n` +
+    `clicker  ${fmt(st.model_size_mm)}  mm\n` +
+    `cap      ${fmt(st.cap_size_mm)}  mm\n` +
+    `holder   ${fmt(st.holder_size_mm)}  mm\n`;
+  if (st.width_squeeze && st.width_squeeze > 1.0)
+    txt += `width squeezed x${st.width_squeeze}\n`;
+  if (st.base_trimmed_mm)
+    txt += `base trimmed ${st.base_trimmed_mm} mm\n`;
+  txt += `look: ${st.look}  travel: ${st.travel_mm} mm`;
+  $("dims").textContent = txt;
 }
 
 async function loadPreview(stats) {
@@ -268,12 +277,6 @@ async function run() {
   $("run").disabled = true;
   $("status").textContent = "Running pipeline… (big models take a few seconds)";
   try {
-    if (file.size > 4 * 1024 * 1024) {
-      renderLog([{ level: "ERROR", msg: `File is ${(file.size/1024/1024).toFixed(1)} MB — Vercel limits uploads to 4 MB. Please reduce the model size or run the app locally.` }], true);
-      $("status").textContent = "Failed - see log.";
-      $("run").disabled = false;
-      return;
-    }
     const fd = new FormData();
     fd.append("model", file);
     fd.append("params", JSON.stringify(params));
@@ -283,7 +286,7 @@ async function run() {
       data = await res.json();
     } catch (_) {
       const msg = res.status === 413
-        ? "File too large for Vercel (4 MB limit). Run the app locally for big models."
+        ? "File too large — server rejected it (413)."
         : `Server error ${res.status} — response was not JSON.`;
       renderLog([{ level: "ERROR", msg }], true);
       $("status").textContent = "Failed - see log.";
