@@ -1,0 +1,7 @@
+output/
+tmp_shot/
+__pycache__/
+*.pyc
+fidget_tool.log
+selftest.py
+run.bat
