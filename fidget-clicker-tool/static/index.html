@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fidget Clicker Tool</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="panel">
+  <h1>Fidget Clicker Tool</h1>
+  <p class="hint">MX switch preset &middot; everything stays local</p>
+
+  <label class="field">
+    <span>3D model (.stl / .obj)</span>
+    <input type="file" id="file" accept=".stl,.obj">
+  </label>
+
+  <label class="field">
+    <span>Cap height &mdash; "auto" detects the seam, or a number in mm from the top</span>
+    <input type="text" id="cap_height_mm" value="auto" placeholder="auto">
+  </label>
+
+  <label class="field">
+    <span>Size mode</span>
+    <select id="size_mode">
+      <option value="minimize">Minimize &mdash; smallest clicker that fits the switch</option>
+      <option value="grow_if_needed">Keep size (grow only if switch doesn't fit)</option>
+      <option value="original">Original size, never rescale</option>
+    </select>
+  </label>
+
+  <label class="field">
+    <span>Manual scale factor (ignored in minimize mode)</span>
+    <input type="number" id="manual_scale_factor" value="1.0" step="0.05" min="0.01">
+  </label>
+
+  <label class="field">
+    <span>Look</span>
+    <select id="look">
+      <option value="flush">Flush &mdash; unpressed clicker looks like the original object</option>
+      <option value="floating">Floating &mdash; tutorial style, cap hovers above the body</option>
+    </select>
+  </label>
+
+  <label class="field">
+    <span>Rest float (mm) &mdash; cap rest height over the switch; "auto" = 13.8 (MX)</span>
+    <input type="text" id="rest_float_mm" value="auto" placeholder="auto">
+  </label>
+
+  <label class="field">
+    <span>Solid material below switch (mm)</span>
+    <input type="number" id="bottom_solid_mm" value="2.2" step="0.1" min="0">
+  </label>
+
+  <label class="field">
+    <span>Output file prefix</span>
+    <input type="text" id="output_prefix" value="fidget">
+  </label>
+
+  <div class="buttons">
+    <button id="run">&#9658; Run &amp; Preview</button>
+    <button id="export" disabled>Export STL</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="legend">
+    <span><i style="background:#9fb0c0"></i>holder</span>
+    <span><i style="background:#cdd8e2"></i>cap</span>
+    <span><i style="background:#33cc66"></i>switch housing</span>
+    <span><i style="background:#ff9933"></i>keycap stem</span>
+    <span><i style="background:#4488ff"></i>cut plane</span>
+  </div>
+  <div id="log"></div>
+</div>
+<div id="viewport"><div id="dims"></div></div>
+
+<script src="/static/vendor/three.min.js?v=2"></script>
+<script src="/static/vendor/OrbitControls.js?v=2"></script>
+<script src="/static/vendor/STLLoader.js?v=2"></script>
+<script src="/static/main.js?v=2"></script>
+</body>
+</html>

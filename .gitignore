@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+venv/
+.env
+
+# App generated files
+fidget-clicker-tool/output/*.stl
+fidget-clicker-tool/tmp_shot/
+fidget-clicker-tool/fidget_tool.log
+
+# Large binary files
+Sunny Dumpling.obj
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
