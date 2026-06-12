@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Fidget Clicker Tool</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
 <div id="panel">
@@ -19,6 +19,14 @@
     <span>Cap height &mdash; "auto" detects the seam, or a number in mm from the top</span>
     <input type="text" id="cap_height_mm" value="auto" placeholder="auto">
   </label>
+  <div class="field" id="cut_tuner" style="display:none">
+    <span>Adjust the cut, then click Run again</span>
+    <input type="range" id="cap_slider" min="1" max="40" step="0.5">
+    <div class="tuner-row">
+      <span id="cap_slider_val"></span>
+      <button type="button" id="cap_auto" class="mini">back to auto</button>
+    </div>
+  </div>
 
   <label class="field">
     <span>Size mode</span>
@@ -48,7 +56,7 @@
   </label>
 
   <label class="field">
-    <span>Solid material below switch (mm)</span>
+    <span>Floor under the switch (mm) &mdash; plastic between the switch pocket and the print bed</span>
     <input type="number" id="bottom_solid_mm" value="2.2" step="0.1" min="0">
   </label>
 

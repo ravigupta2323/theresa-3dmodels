@@ -474,11 +474,14 @@ def _find_seam(mesh, log):
     return float(best_z)
 
 
-def _scaled_polys(mesh, z_scaled, scale):
+def _scale_polys_xy(polys, scale):
     import shapely.affinity as aff
 
-    polys = _section_polygons(mesh, z_scaled / scale)
     return [aff.scale(q, xfact=scale, yfact=scale, origin=(0, 0)) for q in polys]
+
+
+def _scaled_polys(mesh, z_scaled, scale):
+    return _scale_polys_xy(_section_polygons(mesh, z_scaled / scale), scale)
 
 
 def _cavity_probe_depths(tpl, sink):
@@ -492,8 +495,12 @@ def _cavity_probe_depths(tpl, sink):
         (sink + hh - 0.01, house_half),
     ]
     if sink > 1.0:
+        # shaft walls only matter BELOW the swallow pocket - everything above
+        # is removed by the pocket anyway (that's the seam region)
         shaft_half = SHAFT_W / 2 + WALL_MARGIN_MM
-        depths += [(1.0, shaft_half), (sink / 2, shaft_half), (sink - 0.5, shaft_half)]
+        top = min(POCKET_DEPTH + 0.5, sink - 0.5)
+        depths += [(top, shaft_half), ((top + sink) / 2, shaft_half),
+                   (sink - 0.5, shaft_half)]
     return depths
 
 
@@ -509,40 +516,98 @@ def _walls_ok(mesh, scale, cx, cy, z_top_scaled, tpl, sink):
     return True
 
 
-def _fit_check_single(mesh, scale, tpl, bottom_solid, sink, cap_mm=None, cut_frac=None):
-    """Single-piece mode: would the switch fit at uniform scale `scale`?"""
+EMBED_CANDIDATES = (6.5, 3.25)  # try full then half keycap embed
+
+
+def _fit_core(polys_at, h, scale, tpl, bottom_solid, rest_float, flush,
+              cap_mm=None, cut_frac=None):
+    """Single-piece fit test. `polys_at(z_orig)` returns the cross-section
+    polygons of the UNSCALED mesh at that height."""
     hh = tpl.housing_h
-    h_s = float(mesh.bounds[1][2]) * scale
+    h_s = h * scale
     z_cut = cut_frac * h_s if cut_frac is not None else h_s - cap_mm
-    if z_cut - sink - hh < bottom_solid:
-        return False
-    cut_polys = _scaled_polys(mesh, z_cut - 0.05, scale)
+    cut_polys = _scale_polys_xy(polys_at((z_cut - 0.05) / scale), scale)
     if not cut_polys:
         return False
     largest = max(cut_polys, key=lambda q: q.area)
     cx, cy = largest.centroid.x, largest.centroid.y
     plate = shapely_box(cx - tpl.housing_w / 2, cy - tpl.housing_d / 2,
                         cx + tpl.housing_w / 2, cy + tpl.housing_d / 2)
-    if not largest.contains(plate):
+
+    # the keycap embeds into the cap only where the cap can contain the
+    # plate (must mirror the assembly's _embed_depth logic)
+    embed = 0.0
+    for e in EMBED_CANDIDATES:
+        if z_cut + e > h_s - 0.2:
+            continue
+        polys = _scale_polys_xy(polys_at((z_cut + e) / scale), scale)
+        if polys and unary_union(polys).contains(plate):
+            embed = e
+            break
+    sink = max(rest_float - embed, 0.0) if flush else 0.0
+    if z_cut - sink - hh < bottom_solid:
         return False
-    return _walls_ok(mesh, scale, cx, cy, z_cut, tpl, sink)
+    if flush:
+        # flush look: the keycap hides inside the cap/shaft, so the cap may
+        # be narrower than it - require the stem region plus a solid bond
+        stem = shapely_box(cx - 4, cy - 4, cx + 4, cy + 4)
+        if not largest.contains(stem):
+            return False
+        if largest.intersection(plate).area < 0.5 * plate.area:
+            return False
+    else:
+        # floating look: the keycap is visible under the cap - must be covered
+        if not largest.contains(plate):
+            return False
+    for depth, half in _cavity_probe_depths(tpl, sink):
+        polys = _scale_polys_xy(polys_at((z_cut - depth) / scale), scale)
+        if not polys:
+            return False
+        fp = shapely_box(cx - half, cy - half, cx + half, cy + half)
+        if not unary_union(polys).contains(fp):
+            return False
+    return True
 
 
-def _fit_check_two(holder, cap, scale, tpl, bottom_solid, sink, cx, cy,
-                   z_house_ref, z_under):
+def _fit_check_single(mesh, scale, tpl, bottom_solid, rest_float, flush,
+                      cap_mm=None, cut_frac=None):
+    return _fit_core(
+        lambda z: _section_polygons(mesh, z),
+        float(mesh.bounds[1][2]), scale, tpl, bottom_solid, rest_float, flush,
+        cap_mm=cap_mm, cut_frac=cut_frac,
+    )
+
+
+
+
+def _fit_check_two(holder, cap, scale, tpl, bottom_solid, rest_float, flush,
+                   cx, cy, z_house_ref, z_under):
     """Two-piece mode: housing + shaft fit in the holder, and the cap can
     cover/bond to the keycap plate."""
     hh = tpl.housing_h
+    cxs, cys_ = cx * scale, cy * scale
+    plate0 = shapely_box(cxs - tpl.housing_w / 2, cys_ - tpl.housing_d / 2,
+                         cxs + tpl.housing_w / 2, cys_ + tpl.housing_d / 2)
+    embed = 0.0
+    c_top = float(cap.bounds[1][2])
+    for e in EMBED_CANDIDATES:
+        if (z_under + e / scale) > c_top - 0.2 / scale:
+            continue
+        polys = _scale_polys_xy(
+            _section_polygons(cap, z_under + e / scale), scale
+        )
+        if polys and unary_union(polys).contains(plate0):
+            embed = e
+            break
+    sink = max(rest_float - embed, 0.0) if flush else 0.0
     z_top = z_house_ref * scale          # holder surface at the switch
     if z_top - sink - hh < bottom_solid:
         return False
     cxs, cys = cx * scale, cy * scale
     if not _walls_ok(holder, scale, cxs, cys, z_top, tpl, sink):
         return False
-    # cap must be at least as wide as the keycap plate...
-    c_lo, c_hi = cap.bounds
-    if (c_hi[0] - c_lo[0]) * scale < tpl.housing_w or \
-       (c_hi[1] - c_lo[1]) * scale < tpl.housing_d:
+    # cap must be at least as wide as the keycap stem region
+    if (c_hi[0] - c_lo[0]) * scale < 8 or (c_hi[1] - c_lo[1]) * scale < 8:
         return False
     # ...and reasonably cover it a couple of mm above its underside
     plate = shapely_box(cxs - tpl.housing_w / 2, cys - tpl.housing_d / 2,
@@ -627,28 +692,6 @@ def _drop_debris(part, name, log, min_diag_mm=1.5):
     return keep[0] if len(keep) == 1 else trimesh.util.concatenate(keep)
 
 
-def _keycap_plate_z(part_top, cx, cy, z_start, tpl, log):
-    """Where the keycap plate top should sit: just above the cap underside,
-    sunk deeper (max 2.3mm, keeping the cross socket clear) when the cap
-    underside is curved, until the plate is fully covered."""
-    plate = shapely_box(cx - tpl.housing_w / 2, cy - tpl.housing_d / 2,
-                        cx + tpl.housing_w / 2, cy + tpl.housing_d / 2)
-    for t in np.arange(EMBED_MM, 2.31, 0.25):
-        polys = _section_polygons(part_top, z_start + t)
-        if polys and unary_union(polys).contains(plate):
-            if t > 0.5:
-                log.info(
-                    f"Keycap plate sunk {t:.2f}mm into the curved cap "
-                    "underside for a solid bond"
-                )
-            return z_start + t
-    log.warn(
-        "Cap underside is very curved - the keycap plate connection is "
-        "partial (sunk 2.3mm). Consider a different cut point."
-    )
-    return z_start + 2.3
-
-
 # --------------------------------------------------------------------------
 # main pipeline
 # --------------------------------------------------------------------------
@@ -668,7 +711,9 @@ def run_pipeline(model_path, params, log=None):
             rest_float = tpl.rest_float
     except (TypeError, ValueError):
         rest_float = tpl.rest_float
-    sink = rest_float if look == "flush" else 0.0
+    flush = look == "flush"
+    # deepest the switch could need to be buried, assuming a full keycap embed
+    sink_min = max(rest_float - tpl.keycap_h, 0.0) if flush else 0.0
 
     cap_mm = None
     try:
@@ -684,11 +729,11 @@ def run_pipeline(model_path, params, log=None):
         f"bottom_solid={bottom_solid}mm size_mode={size_mode}"
     )
     log.info(f"Switch preset: MX (housing {hw:.1f} x {hd:.1f} x {hh:.2f}mm)")
-    if look == "flush":
+    if flush:
         log.info(
-            f"Flush look: switch buried {rest_float:.1f}mm below the seam so "
-            "the unpressed clicker matches the original shape; pressing sinks "
-            f"the cap up to {MX_TRAVEL:.0f}mm into a hidden pocket."
+            "Flush look: switch buried below the seam so the unpressed "
+            "clicker matches the original shape; pressing sinks the cap up "
+            f"to {MX_TRAVEL:.0f}mm into a hidden pocket."
         )
 
     mesh = load_model(model_path, log)
@@ -750,11 +795,11 @@ def run_pipeline(model_path, params, log=None):
 
         def fit_fn(s):
             return _fit_check_two(
-                holder_a, cap_a, s, tpl, bottom_solid, sink,
+                holder_a, cap_a, s, tpl, bottom_solid, rest_float, flush,
                 cx0, cy0, z_house_ref0, z_under0
             )
 
-        lo_guess = (sink + hh + bottom_solid) / z_house_ref0
+        lo_guess = (sink_min + hh + bottom_solid) / z_house_ref0
     else:
         mesh = comps[0] if len(comps) == 1 else trimesh.util.concatenate(comps)
         mesh_a = _analysis_mesh(mesh)
@@ -765,10 +810,11 @@ def run_pipeline(model_path, params, log=None):
 
             def fit_fn(s):
                 return _fit_check_single(
-                    mesh_a, s, tpl, bottom_solid, sink, cut_frac=cut_frac
+                    mesh_a, s, tpl, bottom_solid, rest_float, flush,
+                    cut_frac=cut_frac
                 )
 
-            lo_guess = (sink + hh + bottom_solid) / (cut_frac * h)
+            lo_guess = (sink_min + hh + bottom_solid) / (cut_frac * h)
         else:
             cut_frac = None
             if cap_mm >= h:
@@ -779,10 +825,11 @@ def run_pipeline(model_path, params, log=None):
 
             def fit_fn(s):
                 return _fit_check_single(
-                    mesh_a, s, tpl, bottom_solid, sink, cap_mm=cap_mm
+                    mesh_a, s, tpl, bottom_solid, rest_float, flush,
+                    cap_mm=cap_mm
                 )
 
-            lo_guess = (cap_mm + sink + hh + bottom_solid) / h
+            lo_guess = (cap_mm + sink_min + hh + bottom_solid) / h
 
     # ---- resolve the scale --------------------------------------------------
     if size_mode == "minimize":
@@ -868,16 +915,39 @@ def run_pipeline(model_path, params, log=None):
                 "union", [part_bottom] + islands, "reattaching sliced features", log
             )
 
-    # where the keycap plate bonds to the cap (sinks into curved undersides)
-    z_plate = _keycap_plate_z(part_top, cx, cy, z_under, tpl, log)
+    # embed the keycap template into the cap, socket opening at the cap
+    # underside like a real keycap - but only as deep as the cap can fully
+    # contain the plate (otherwise it would poke out of the cap's sides)
+    plate_geo = shapely_box(cx - hw / 2, cy - hd / 2, cx + hw / 2, cy + hd / 2)
+    embed = 0.0
+    for e in EMBED_CANDIDATES:
+        polys = _section_polygons(part_top, z_under + e)
+        if polys and unary_union(polys).contains(plate_geo):
+            embed = e
+            break
+    z_plate = z_under + embed   # top of the keycap template
+    if embed >= kh - 0.05:
+        log.info("Keycap socket fully embedded inside the cap")
+    elif embed > 0.05:
+        log.info(
+            f"Keycap socket embedded {embed:.1f}mm into the cap "
+            f"({kh - embed:.1f}mm protrudes below, hidden inside the shaft)"
+        )
+    else:
+        log.info(
+            "Cap is narrower than the keycap plate - the socket hangs under "
+            "the cap (hidden inside the shaft in the flush look)"
+        )
 
-    # housing depth: at rest the plate top sits rest_float above the housing
-    # top, so burying it (z_plate - rest_float) puts the cap exactly at its
-    # designed position; floating look keeps the housing at the surface.
+    # housing depth: at rest the keycap plate top sits rest_float above the
+    # housing top, so burying it (z_plate - rest_float) puts the cap exactly
+    # at its designed position; floating look keeps the housing at the surface
     if look == "flush":
         z_house = z_plate - rest_float
+        sink = z_surface - z_house
     else:
         z_house = z_surface
+        sink = 0.0
 
     # wall sanity warnings (forced placement continues regardless)
     for depth, half in _cavity_probe_depths(tpl, sink):
@@ -929,13 +999,25 @@ def run_pipeline(model_path, params, log=None):
                 "difference", [part_bottom] + sweep, "swallow pocket", log
             )
         else:
-            pocket_poly = cut_outline.buffer(POCKET_CLR)
-            pocket = trimesh.creation.extrude_polygon(
-                pocket_poly, height=POCKET_DEPTH + 10.0
-            )
-            pocket.apply_translation([0, 0, z_cut - POCKET_DEPTH])
+            # the pocket must clear the part of the CAP that descends into the
+            # body - its silhouette over the bottom POCKET_DEPTH, not just the
+            # cut outline (the cap may widen above the cut, e.g. a knob)
+            sweep = list(cut_outline.geoms) if hasattr(cut_outline, "geoms") \
+                else [cut_outline]
+            for dzp in (0.4, 1.5, 3.0, POCKET_DEPTH):
+                sweep += _section_polygons(part_top, z_cut + dzp)
+            pocket_poly = unary_union(sweep).buffer(POCKET_CLR)
+            pocket_polys = list(pocket_poly.geoms) \
+                if hasattr(pocket_poly, "geoms") else [pocket_poly]
+            cutters = []
+            for poly in pocket_polys:
+                cut3d = trimesh.creation.extrude_polygon(
+                    poly, height=POCKET_DEPTH + 10.0
+                )
+                cut3d.apply_translation([0, 0, z_cut - POCKET_DEPTH])
+                cutters.append(cut3d)
             part_bottom = _boolean(
-                "difference", [part_bottom, pocket], "swallow pocket", log
+                "difference", [part_bottom] + cutters, "swallow pocket", log
             )
         log.info(
             f"Swallow pocket carved {POCKET_DEPTH:.1f}mm deep under the cap"
@@ -950,8 +1032,15 @@ def run_pipeline(model_path, params, log=None):
     # ---- cap: keycap connector ----------------------------------------------
     keycap = tpl.keycap.copy()
     keycap.apply_translation([cx, cy, z_plate - kh])
+    if embed > 0.05:
+        # carve a pocket in the cap so the template (and its socket cavity)
+        # sits INSIDE the cap; the pocket top is exactly the template top so
+        # the roof above stays solid
+        kbox = trimesh.creation.box(extents=[hw, hd, kh + 2.0])
+        kbox.apply_translation([cx, cy, z_plate - (kh + 2.0) / 2])
+        part_top = _boolean("difference", [part_top, kbox], "keycap pocket", log)
     part_top = _boolean("union", [part_top, keycap], "keycap connector", log)
-    log.info("Cap: keycap connector fused underneath, MX socket facing down")
+    log.info("Cap: keycap socket fused in, MX socket facing down")
 
     part_top = _drop_debris(part_top, "cap", log)
     part_bottom = _drop_debris(part_bottom, "holder", log)
@@ -987,6 +1076,9 @@ def run_pipeline(model_path, params, log=None):
         "switch_center": [round(float(cx), 2), round(float(cy), 2)],
         "housing_size": [hw, hd, round(hh, 2)],
         "solid_below_housing_mm": round(float(solid_below), 2),
+        "keycap_embed_mm": round(float(embed), 2),
+        "cap_height_final_mm": None if two_part else
+            round(float(bbox[1][2] - z_surface), 2),
         "cap_faces": len(part_top.faces),
         "holder_faces": len(part_bottom.faces),
         "bbox": [

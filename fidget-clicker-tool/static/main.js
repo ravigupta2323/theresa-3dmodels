@@ -148,6 +148,23 @@ async function addPreviewMesh(name, color, opacity) {
   }
 }
 
+function setupCutTuner(st) {
+  const tuner = $("cut_tuner");
+  if (st.mode !== "single_piece" || !st.cap_height_final_mm) {
+    tuner.style.display = "none";
+    return;
+  }
+  const h = st.model_size_mm[2];
+  const slider = $("cap_slider");
+  slider.min = 1;
+  slider.max = Math.max(2, h - 5).toFixed(1);
+  slider.step = 0.5;
+  slider.value = st.cap_height_final_mm;
+  $("cap_slider_val").textContent =
+    `cap is the top ${st.cap_height_final_mm} mm (clicker ${h} mm tall)`;
+  tuner.style.display = "flex";
+}
+
 function setDims(st) {
   const fmt = (a) => a.map((v) => v.toFixed(1)).join(" x ");
   $("dims").textContent =
@@ -217,6 +234,7 @@ async function run() {
         `Done (${st.mode === "two_piece" ? "two-piece model" : "single piece"}). ` +
         `Scale x${st.scale_applied}.`;
       setDims(st);
+      setupCutTuner(st);
       await loadPreview(st);
       $("export").disabled = false;
     } else {
@@ -261,6 +279,7 @@ async function restoreLastResult() {
     if (d.has_result && d.stats) {
       renderLog([{ level: "INFO", msg: "Restored the last run's preview." }]);
       setDims(d.stats);
+      setupCutTuner(d.stats);
       await loadPreview(d.stats);
       $("export").disabled = false;
     }
@@ -274,4 +293,13 @@ loadParams();
 init3d();
 $("run").addEventListener("click", run);
 $("export").addEventListener("click", exportStl);
+$("cap_slider").addEventListener("input", () => {
+  $("cap_height_mm").value = $("cap_slider").value;
+  $("cap_slider_val").textContent =
+    `cap = top ${$("cap_slider").value} mm - click Run to regenerate`;
+});
+$("cap_auto").addEventListener("click", () => {
+  $("cap_height_mm").value = "auto";
+  $("cap_slider_val").textContent = "auto seam - click Run to regenerate";
+});
 restoreLastResult();
