@@ -66,12 +66,15 @@ logger = logging.getLogger("fidget")
 if not logger.handlers:
     logger.setLevel(logging.INFO)
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-    fh.setFormatter(fmt)
     sh = logging.StreamHandler(sys.stdout)
     sh.setFormatter(fmt)
-    logger.addHandler(fh)
     logger.addHandler(sh)
+    try:
+        fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+    except OSError:
+        pass  # read-only filesystem (e.g. Vercel serverless)
 
 
 class RunLog:
