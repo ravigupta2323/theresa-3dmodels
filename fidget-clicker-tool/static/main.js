@@ -56,6 +56,45 @@ function renderLog(entries, append) {
 
 /* ---------- three.js scene ---------- */
 let scene, camera, renderer, controls, modelGroup;
+let previewMeshes = {};
+let lastStats = null;
+const cutPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+
+function applyViewMode() {
+  const mode = $("view_mode").value;
+  for (const name of ["bottom", "top"]) {
+    const m = previewMeshes[name];
+    if (!m) continue;
+    m.material.clippingPlanes = mode === "cutaway" ? [cutPlane] : null;
+    m.material.side = mode === "normal" ? THREE.FrontSide : THREE.DoubleSide;
+    m.material.transparent = mode === "xray";
+    m.material.opacity = mode === "xray" ? 0.25 : 1.0;
+    m.material.depthWrite = mode !== "xray";
+    m.material.needsUpdate = true;
+  }
+  // make the switch ghosts pop in x-ray mode
+  for (const name of ["housing", "keycap"]) {
+    const m = previewMeshes[name];
+    if (!m) continue;
+    m.material.opacity = mode === "xray" ? 0.95 : 0.4;
+    m.material.depthWrite = mode === "xray";
+    m.material.needsUpdate = true;
+  }
+}
+
+function updateCutawayPlane() {
+  if ($("view_mode").value !== "cutaway" || !lastStats) return;
+  // vertical plane through the switch center, always removing the half
+  // that faces the camera (model (x,y,z) -> world (x,z,-y))
+  const sc = lastStats.switch_center;
+  const center = new THREE.Vector3(sc[0], 0, -sc[1]);
+  const dir = camera.position.clone().sub(controls.target);
+  dir.y = 0;
+  if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+  dir.normalize();
+  cutPlane.normal.copy(dir).negate();
+  cutPlane.constant = center.dot(dir);
+}
 
 function init3d() {
   const vp = $("viewport");
@@ -67,6 +106,7 @@ function init3d() {
   camera.position.set(120, 90, 120);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.localClippingEnabled = true;
   clog("init3d: WebGL renderer created, capabilities:",
        renderer.capabilities && renderer.capabilities.isWebGL2 ? "WebGL2" : "WebGL1");
   renderer.setSize(vp.clientWidth, vp.clientHeight);
@@ -109,11 +149,13 @@ function init3d() {
     requestAnimationFrame(animate);
     syncSize();
     controls.update();
+    updateCutawayPlane();
     renderer.render(scene, camera);
   })();
 }
 
 function clearGroup() {
+  previewMeshes = {};
   while (modelGroup.children.length) {
     const c = modelGroup.children.pop();
     if (c.geometry) c.geometry.dispose();
@@ -142,7 +184,9 @@ async function addPreviewMesh(name, color, opacity) {
       transparent: opacity < 1, opacity,
       depthWrite: opacity >= 1,
     });
-    modelGroup.add(new THREE.Mesh(geo, mat));
+    const mesh = new THREE.Mesh(geo, mat);
+    previewMeshes[name] = mesh;
+    modelGroup.add(mesh);
   } catch (e) {
     renderLog([{ level: "ERROR", msg: `preview ${name} failed: ${e}` }], true);
   }
@@ -176,6 +220,7 @@ function setDims(st) {
 
 async function loadPreview(stats) {
   $("status").textContent = "Loading 3D preview…";
+  lastStats = stats;
   clearGroup();
   // solid parts first, ghost "shadow" overlays after (housing + keycap stem)
   await addPreviewMesh("bottom", 0x9fb0c0, 1.0);
@@ -208,6 +253,7 @@ async function loadPreview(stats) {
   camera.near = size / 100;
   camera.far = size * 10;
   camera.updateProjectionMatrix();
+  applyViewMode();
   $("status").textContent = "Preview ready.";
 }
 
@@ -290,6 +336,8 @@ async function restoreLastResult() {
 }
 
 loadParams();
+const viewParam = new URLSearchParams(location.search).get("view");
+if (viewParam) $("view_mode").value = viewParam;
 init3d();
 $("run").addEventListener("click", run);
 $("export").addEventListener("click", exportStl);
@@ -298,6 +346,7 @@ $("cap_slider").addEventListener("input", () => {
   $("cap_slider_val").textContent =
     `cap = top ${$("cap_slider").value} mm - click Run to regenerate`;
 });
+$("view_mode").addEventListener("change", applyViewMode);
 $("cap_auto").addEventListener("click", () => {
   $("cap_height_mm").value = "auto";
   $("cap_slider_val").textContent = "auto seam - click Run to regenerate";

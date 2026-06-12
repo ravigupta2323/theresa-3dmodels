@@ -428,6 +428,25 @@ def _local_surface_z(mesh, cx, cy, half_w, half_d, from_above, n=5):
     return float(min(firsts.values()))
 
 
+def _refine_seam(mesh, z0, dz):
+    """Fine pass around the coarse seam sample: land exactly on the ledge
+    corner (step seams) or the narrowest point (grooves)."""
+    n = 33
+    fz = np.linspace(z0 - 1.2 * dz, z0 + 1.2 * dz, n)
+    fa = np.array([
+        sum(q.area for q in _section_polygons(mesh, z)) for z in fz
+    ])
+    if fa.max() <= 0:
+        return z0
+    interior = fa[2:-2]
+    if interior.min() < min(fa[0], fa[-1]) * 0.985:
+        # groove: cut at the narrowest point
+        return float(fz[2 + int(np.argmin(interior))])
+    # step: cut just above the biggest jump (the ledge corner)
+    i = int(np.argmax(np.abs(np.diff(fa))))
+    return float(fz[i + 1])
+
+
 def _find_seam(mesh, log):
     """Auto cut point: the most pronounced step or groove in the
     cross-section-area profile, preferring seams higher up the model."""
@@ -467,9 +486,10 @@ def _find_seam(mesh, log):
         else:
             clusters.append([(s, z)])
     best_z = max(clusters[-1], key=lambda t: t[0])[1]
+    best_z = _refine_seam(mesh, best_z, zs[1] - zs[0])
     log.info(
-        f"Auto cut: detected a seam at z={best_z:.1f} "
-        f"({best_z / h * 100:.0f}% of the model height)"
+        f"Auto cut: detected a seam at z={best_z:.2f} "
+        f"({best_z / h * 100:.1f}% of the model height)"
     )
     return float(best_z)
 
