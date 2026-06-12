@@ -268,11 +268,28 @@ async function run() {
   $("run").disabled = true;
   $("status").textContent = "Running pipeline… (big models take a few seconds)";
   try {
+    if (file.size > 4 * 1024 * 1024) {
+      renderLog([{ level: "ERROR", msg: `File is ${(file.size/1024/1024).toFixed(1)} MB — Vercel limits uploads to 4 MB. Please reduce the model size or run the app locally.` }], true);
+      $("status").textContent = "Failed - see log.";
+      $("run").disabled = false;
+      return;
+    }
     const fd = new FormData();
     fd.append("model", file);
     fd.append("params", JSON.stringify(params));
     const res = await fetch("/api/run", { method: "POST", body: fd });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      const msg = res.status === 413
+        ? "File too large for Vercel (4 MB limit). Run the app locally for big models."
+        : `Server error ${res.status} — response was not JSON.`;
+      renderLog([{ level: "ERROR", msg }], true);
+      $("status").textContent = "Failed - see log.";
+      $("run").disabled = false;
+      return;
+    }
     renderLog(data.log);
     if (data.ok) {
       const st = data.stats;
